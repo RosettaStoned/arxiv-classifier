@@ -1,0 +1,70 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=core.settings
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - MODEL_PATH=/app/classifier_api/model
+      - CLASSIFICATION_BATCH_SIZE=16
+      - CLASSIFICATION_REQUEST_TIMEOUT=30
+      - CLASSIFICATION_MAX_PENDING=2
+      - OMP_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - PYTHONUNBUFFERED=1
+    command: gunicorn core.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=core.settings
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - MODEL_PATH=/app/classifier_api/model
+      - CLASSIFICATION_BATCH_SIZE=16
+      - ASYNC_PREDICTION_BATCH_SIZE=${ASYNC_PREDICTION_BATCH_SIZE:-16}
+      - ASYNC_PREDICTION_BATCH_FLUSH_INTERVAL=${ASYNC_PREDICTION_BATCH_FLUSH_INTERVAL:-0.03}
+      - CLASSIFICATION_REQUEST_TIMEOUT=30
+      - CLASSIFICATION_MAX_PENDING=2
+      - OMP_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - PYTHONUNBUFFERED=1
+    command: celery -A core worker --loglevel=INFO --pool=prefork --concurrency=4 --queues=predictions
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - web
+
+volumes:
+  redis_data:

@@ -1,0 +1,8 @@
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["data", "training-output", "inference_service/model"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
